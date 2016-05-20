@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2013, Red Hat, Inc
+#
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -30,28 +30,36 @@
 #
 # Authors:  Michal Srb <msrb@redhat.com>
 
+from __future__ import print_function
+
+from javapackages.metadata.metadata import Metadata
+from javapackages.metadata.artifact import MetadataArtifact
+from javapackages.metadata.dependency import MetadataDependency
+
+from javapackages.maven.artifact import Artifact, ArtifactFormatException
+from javapackages.maven.pom import POM, PomLoadingException
+from javapackages.ivy.ivyfile import IvyFile
+
+from javapackages.xmvn.xmvn_resolve import (XMvnResolve, ResolutionRequest,
+                                            XMvnResolveException)
+from javapackages.common.util import args_to_unicode
+from javapackages.common.exception import JavaPackagesToolsException
+
 import sys
 import os
-import optparse
+import lxml.etree
+from optparse import OptionParser
 
-from javapackages.artifact import *
-from javapackages.pom import *
-from lxml.etree import Element, ElementTree, SubElement, Comment
-from lxml import etree
 
-class SaneParser(optparse.OptionParser):
-    def format_epilog(self, formatter):
-        return self.epilog
-
-usage="usage: %prog [options] <MVN spec | POM path> [artifact path]"
-epilog="""
+usage = "usage: %prog [options] <MVN spec | POM path> [artifact path]"
+epilog = """
 MVN spec:
 Specification of Maven artifact in following format:
 
     groupId:artifactId[:extension[:classifier]][:version]
 
-Wildcards (*) and empty parts in specifications are allowed (treated as wildcard).
-JAR path must also be specified if this option is used.
+Wildcards (*) and empty parts in specifications are allowed (treated
+as wildcard). JAR path must also be specified if this option is used.
 
 Examples of valid specifications:
 commons-lang:commons-lang:1.2
@@ -67,65 +75,240 @@ Artifact path:
 Path where Artifact file (usually JAR) is located.
 """
 
+
 config = ".xmvn-reactor"
 
-class ExtensionsDontMatch(Exception):
+
+class ExtensionsDontMatch(JavaPackagesToolsException):
     pass
 
-if __name__ == "__main__":
-    parser = SaneParser(usage=usage,
+
+def get_parent_pom(pom):
+    try:
+        metadata = Metadata.create_from_file(config)
+        known_artifacts = metadata.get_provided_artifacts()
+        # TODO: implement __hash__() and __cmp__() in MetadataArtifact
+        for artifact in known_artifacts:
+            if (artifact.extension == "pom" and
+               artifact.groupId == pom.groupId and
+               artifact.artifactId == pom.artifactId):
+                return POM(artifact.path)
+    except IOError:
+        pass
+
+    req = ResolutionRequest(pom.groupId, pom.artifactId,
+                            extension="pom", version=pom.version)
+    result = XMvnResolve.process_raw_request([req])[0]
+    if not result:
+        raise XMvnResolveException("Unable to resolve parent POM {g}:{a}:{e}:{v}"
+                                   .format(g=pom.groupId, a=pom.artifactId,
+                                           e="pom", v=pom.version))
+
+    return POM(result.artifactPath)
+
+
+def is_it_ivy_file(fpath):
+    """Try to determine whether file in given path is Ivy file or not"""
+    et = lxml.etree.ElementTree()
+    doc = et.parse(fpath)
+
+    return doc.tag == "ivy-module"
+
+
+def add_artifact_elements(metadata, art, ppath=None, jpath=None):
+    ext_backup = art.extension
+    for path in [ppath, jpath]:
+        if path:
+            if path is ppath:
+                if not is_it_ivy_file(ppath):
+                    art.extension = "pom"
+                else:
+                    art.extension = os.path.splitext(ppath)[1][1:]
+                    art.properties["type"] = "ivy"
+            else:
+                art.extension = ext_backup
+
+            art.path = os.path.abspath(path)
+            metadata.artifacts.append(art.copy())
+
+
+def merge_sections(main, update):
+    for upd in update:
+        for curr in main:
+            if curr.compare_to(upd):
+                curr.merge_with(upd)
+                break
+        else:
+            main.append(upd)
+
+
+def get_model_variables(pom):
+    props = {}
+    if pom.groupId:
+        props["project.groupId"] = pom.groupId
+    if pom.artifactId:
+        props["project.artifactId"] = pom.artifactId
+    if pom.version:
+        props["project.version"] = pom.version
+    return props
+
+
+def expand_props(deps, props):
+    for d in deps:
+        d.interpolate(props)
+
+
+def gather_dependencies(pom_path):
+    if not pom_path:
+        return []
+    pom = POM(pom_path)
+    pom_props = get_model_variables(pom)
+    deps, depm, props = _get_dependencies(pom)
+    # expand project model variables
+    expand_props(deps, pom_props)
+    expand_props(depm, pom_props)
+
+    curr_pom = pom
+    parent = pom.parent
+    while parent:
+        ppom = None
+        if parent.relativePath:
+            try:
+                ppom_path = os.path.join(os.path.dirname(curr_pom._path),
+                                         parent.relativePath)
+                ppom = POM(ppom_path)
+            except PomLoadingException:
+                pass
+        if not ppom:
+            ppom = get_parent_pom(parent)
+
+        parent = ppom.parent
+        pom_props = get_model_variables(ppom)
+        pdeps, pdepm, pprops = _get_dependencies(ppom)
+        expand_props(pdeps, pom_props)
+        expand_props(pdepm, pom_props)
+
+        # merge "dependencies" sections
+        merge_sections(deps, pdeps)
+        # merge "dependencyManagement" sections
+        merge_sections(depm, pdepm)
+
+        # merge "properties" sections
+        for pkey in pprops:
+            if pkey not in props:
+                props[pkey] = pprops[pkey]
+
+        curr_pom = ppom
+
+    for d in deps:
+        d.interpolate(props)
+
+    for dm in depm:
+        dm.interpolate(props)
+
+    # apply dependencyManagement on deps
+    for d in deps:
+        for dm in depm:
+            if d.compare_to(dm):
+                d.merge_with(dm)
+                break
+
+    # only deps with scope "compile" or "runtime" are interesting
+    deps = [x for x in deps if x.scope in ["", "compile", "runtime"]]
+
+    return deps
+
+
+def _get_dependencies(pom):
+    deps = []
+    depm = []
+    props = {}
+
+    deps.extend([x for x in pom.dependencies])
+    depm.extend([x for x in pom.dependencyManagement])
+    props = pom.properties
+
+    return deps, depm, props
+
+
+def _main():
+    OptionParser.format_epilog = lambda self, formatter: self.epilog
+    parser = OptionParser(usage=usage,
                         epilog=epilog)
-    for index, arg in enumerate(sys.argv):
-        sys.argv[index] = arg.decode(sys.getfilesystemencoding())
+    parser.add_option("--skip-dependencies", action="store_true", default=False,
+                      help="skip dependencies section in resulting metadata")
+    parser.add_option("-D", action="append", type="str",
+                      help="add artifact property", metavar="property=value")
+
+    sys.argv = args_to_unicode(sys.argv)
 
     (options, args) = parser.parse_args()
     if len(args) < 1:
         parser.error("At least 1 argument is required")
 
     try:
-        orig = Artifact.from_mvn_str(args[0])
-        orig.validate(allow_backref=False)
+        uart = Artifact.from_mvn_str(args[0])
+        uart.validate(allow_backref=False)
         if len(args) == 1:
             parser.error("When using artifact specification artifact path must be "
-                    "provided")
+                         "provided")
+        if not (uart.groupId and uart.artifactId and uart.version):
+            parser.error("Defined artifact has to include at least groupId, "
+                         "artifactId and version")
     except (ArtifactFormatException):
-        orig = POM(args[0])
+        if is_it_ivy_file(args[0]):
+            uart = IvyFile(args[0])
+        else:
+            # it should be good old POM file
+            uart = POM(args[0])
         pom_path = args[0]
     else:
         pom_path = None
+
+    art = MetadataArtifact(uart.groupId, uart.artifactId, version=uart.version)
+    if hasattr(uart, "extension") and uart.extension:
+        art.extension = uart.extension
+    if hasattr(uart, "classifier") and uart.classifier:
+        art.classifier= uart.classifier
 
     jar_path = None
     if len(args) > 1:
         jar_path = args[1]
         extension = (os.path.splitext(jar_path)[1])[1:]
-        if hasattr(orig, "extension") and orig.extension and orig.extension != extension:
-            raise ExtensionsDontMatch("Extensions don't match: '%s' != '%s'" % (orig.extension, extension))
+        if hasattr(art, "extension") and art.extension and art.extension != extension and not pom_path:
+            raise ExtensionsDontMatch("Extensions don't match: '%s' != '%s'" % (art.extension, extension))
         else:
-            orig.extension = extension
+            art.extension = extension
     else:
-        orig.extension = "pom"
+        art.extension = "pom"
 
     if os.path.exists(config):
-        parser = etree.XMLParser(remove_blank_text=True)
-        root = etree.parse(config, parser).getroot()
+        metadata = Metadata.create_from_file(config)
     else:
-        root = Element("reactorInstallationPlan")
+        metadata = Metadata()
 
-    art = SubElement(root, "artifact")
-    art.append(Comment("Generated by mvn_artifact"))
-    SubElement(art, "groupId").text = orig.groupId
-    SubElement(art, "artifactId").text = orig.artifactId
-    if orig.extension != "jar":
-        SubElement(art, "extension").text = orig.extension
-    if hasattr(orig, "classifier") and orig.classifier:
-        SubElement(art, "classifier").text = orig.classifier
-    if orig.version:
-        SubElement(art, "version").text = orig.version
-    if jar_path:
-        SubElement(art, "file").text = os.path.abspath(jar_path)
-    if pom_path:
-        SubElement(art, "rawPomPath").text = os.path.abspath(pom_path)
+    if (not options.skip_dependencies and pom_path
+       and not is_it_ivy_file(pom_path)):
+        deps = []
+        mvn_deps = gather_dependencies(pom_path)
+        for d in mvn_deps:
+            deps.append(MetadataDependency.from_mvn_dependency(d))
+        if deps:
+            art.dependencies = set(deps)
+    else:
+        art.properties["xmvn.resolver.disableEffectivePom"] = "true"
 
-    with open(config, 'w') as f:
-            f.write(tostring(root, pretty_print=True))
+    if options.D:
+        for d_opt in options.D:
+            key, value = d_opt.split("=")
+            art.properties[key] = value
 
+    add_artifact_elements(metadata, art, pom_path, jar_path)
+
+    metadata.write_to_file(config)
+
+if __name__ == "__main__":
+    try:
+        _main()
+    except JavaPackagesToolsException as e:
+        sys.exit(e)

@@ -1,16 +1,17 @@
 <?xml version="1.0" ?>
-<dependencyMap>
-  <skipProvides/>
-  <dependency>
-    <maven>
-      <artifactId>a</artifactId>
-      <groupId>g</groupId>
-      <version>1.2</version>
-    </maven>
-    <jpp>
-      <artifactId>versioned2</artifactId>
-      <groupId>JPP</groupId>
-      <version>1.2</version>
-    </jpp>
-  </dependency>
-</dependencyMap>
+<ns1:metadata xmlns:ns1="http://fedorahosted.org/xmvn/METADATA/2.3.0">
+   <ns1:artifacts>
+      <ns1:artifact>
+         <ns1:groupId>g</ns1:groupId>
+         <ns1:artifactId>a</ns1:artifactId>
+         <ns1:version>1.2</ns1:version>
+         <ns1:compatVersions>
+            <ns1:version>1.2</ns1:version>
+        </ns1:compatVersions>
+         <ns1:path>%s/usr/share/java/versioned2-1.2.jar</ns1:path>
+         <ns1:properties>
+            <xmvn.resolver.disableEffectivePom>true</xmvn.resolver.disableEffectivePom>
+         </ns1:properties>
+      </ns1:artifact>
+   </ns1:artifacts>
+</ns1:metadata>

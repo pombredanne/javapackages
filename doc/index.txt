@@ -1,7 +1,10 @@
 Java Packaging HOWTO
 ====================
 
-v1.0, 2013-05-03
+v
+include::../VERSION[]
+
+{localdate}
 
 include::preamble.txt[]
 
@@ -31,17 +34,26 @@ include::packaging_best_practices.txt[]
 == Generic Java Builds
 include::generic_java_build.txt[]
 
+[[ant]]
 == Ant
 include::ant.txt[]
 
+[[maven]]
 == Maven
 include::maven.txt[]
+
+[[gradle]]
+== Gradle
+include::gradle.txt[]
 
 == Common Errors
 include::common_errors.txt[]
 
 == Integration of Maven and XMvn Tools
 include::integration_maven_xmvn.txt[]
+
+== Migration from older tools
+include::migration.txt[]
 
 
 [appendix]
@@ -57,22 +69,6 @@ References
 - [[[walsh-muellner]]] Norman Walsh & Leonard Muellner.
   'DocBook - The Definitive Guide'. O'Reilly & Associates. 1999.
   ISBN 1-56592-580-7.
-
-
-[glossary]
-Glossary
---------
-Glossaries are optional. Glossaries entries are an example of a style
-of AsciiDoc labeled lists.
-
-[glossary]
-[[Xdepmap]]depmap::
-  Depmap is a special file telling Maven relationships between
-  groupId,artifactId and JAR file on the filesystem
-
-A second glossary term::
-  The corresponding (indented) definition.
-
 
 ifdef::backend-docbook[]
 [index]

@@ -1,10 +1,9 @@
-#!/bin/sh
+#!/bin/bash
 #
 # Small script to build a classpath depending on the JVM used
 #
 # JPackage Project <http://www.jpackage.org/>
 #
-# $Id: build-classpath,v 1.2 2005/09/17 07:06:19 david Exp $
 
 # Import java functions
 [ -r "%{javadir}-utils/java-functions" ] \

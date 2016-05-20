@@ -1,0 +1,25 @@
+<metadata xmlns="http://fedorahosted.org/xmvn/METADATA/2.3.0">
+    <uuid>432048235932</uuid>
+    <artifacts>
+        <artifact>
+            <groupId>g</groupId>
+            <artifactId>a1</artifactId>
+            <version>1.2</version>
+            <namespace>ns</namespace>
+            <path>/usr/share/java/a1.jar</path>
+            <dependencies>
+                <dependency>
+                    <groupId>g</groupId>
+                    <artifactId>skipped</artifactId>
+                    <requestedVersion>UNKNOWN</requestedVersion>
+                </dependency>
+                <dependency>
+                    <groupId>g</groupId>
+                    <artifactId>a2</artifactId>
+                    <requestedVersion>1.2</requestedVersion>
+                    <namespace>ns</namespace>
+                </dependency>
+            </dependencies>
+        </artifact>
+    </artifacts>
+</metadata>

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Copyright (c) 2013 Red Hat, Inc.
 # All rights reserved.
 #
@@ -35,8 +35,10 @@ set -e
 vars="
 bindir
 datadir
+localstatedir
 mandir
 prefix
+rundir
 sysconfdir
 rpmconfigdir
 
@@ -51,13 +53,12 @@ jvmcommonlibdir
 jvmcommonsysconfdir
 jvmdatadir
 jvmdir
-jvmjardir
 jvmlibdir
 jvmprivdir
 jvmsysconfdir
-mavendepmapdir
-mavendepmapfragdir
 mavenpomdir
+pyinterpreter
+abrtlibdir
 "
 
 vars_re=$(echo $vars | sed 's/ /\\|/g')
@@ -68,12 +69,17 @@ eval $(for _; do echo "$_"; done |
 test -z "${prefix}" && prefix="/usr/local"
 test -z "${bindir}" && bindir="${prefix}/bin"
 test -z "${datadir}" && datadir="${prefix}/share"
+test -z "${localstatedir}" && localstatedir="${prefix}/var"
 test -z "${mandir}" && mandir="${datadir}/man"
+test -z "${rundir}" && rundir="${localstatedir}/run"
 test -z "${sysconfdir}" && sysconfdir="${prefix}/etc"
 test -z "${rpmconfigdir}" && rpmconfigdir="${prefix}/lib/rpm"
 
 test -z "${m2home}" && m2home="${datadir}/xmvn"
+test -z "${pyinterpreter}" && pyinterpreter=$(which python)
+test -z "${abrtlibdir}" && abrtlibdir="${prefix}/lib/abrt-java-connector"
 
-eval $(sed -n 's/^%_\('"$vars_re"'\)\ *\(.*\)$/\1="\2"/;T;s/%{_\(.*}\)/${\1/;p' etc/macros.jpackage)
+eval $(sed -n 's/^%_\('"$vars_re"'\)\ *\(.*\)$/\1="\2"/;T;s/%{_\(.*}\)/${\1/;p' macros.d/macros.jpackage)
 
 set | sed -n 's/^\('"$vars_re"'\)=/&/;T;p' >config.status
+

@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2013, Red Hat, Inc
+#
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,32 +29,35 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Authors:  Stanislav Ochotnicky <sochotnicky@redhat.com>
+
+from __future__ import print_function
+
 import os
 import optparse
 import subprocess
 import sys
 
-from javapackages import Artifact
+from javapackages.maven.artifact import Artifact
+from javapackages.xmvn.xmvn_config import XMvnConfig
+from javapackages.common.util import args_to_unicode, command_exists
+from javapackages.common.mock import socket_path as mock_socket
+
 
 def goal_callback(option, opt_str, value, parser):
-     assert value is None
-     value = []
+    assert value is None
+    value = []
 
-     for arg in parser.rargs:
-         if arg[:2] == "--" and len(arg) > 2:
-             break
-         if arg[:1] == "-" and len(arg) > 1:
-             break
-         value.append(arg)
+    for arg in parser.rargs:
+        if arg[:2] == "--" and len(arg) > 2:
+            break
+        if arg[:1] == "-" and len(arg) > 1:
+            break
+        value.append(arg)
 
-     del parser.rargs[:len(value)]
-     setattr(parser.values, option.dest, value)
+    del parser.rargs[:len(value)]
+    setattr(parser.values, option.dest, value)
 
-
-from javapackages.xmvn_config import XMvnConfig
-
-
-usage="usage: %prog [options] [-- maven-arguments]"
+usage = "usage: %prog [options] [-- maven-arguments]"
 
 if __name__ == "__main__":
     parser = optparse.OptionParser(usage=usage)
@@ -78,6 +81,9 @@ if __name__ == "__main__":
                       action="callback",
                       callback=goal_callback,
                       help="Run Maven goals after default XMvn goals.")
+    parser.add_option("--gradle",
+                      action="store_true",
+                      help="Invoke Gradle instead of Maven.")
     parser.add_option("-i", "--skip-install",
                       action="store_true",
                       help="Skip artifact installation.")
@@ -90,40 +96,53 @@ if __name__ == "__main__":
     parser.add_option("-X", "--debug",
                       action="store_true",
                       help="Enable Maven debugging output (implies -d).")
-    parser.add_option("-n", "--name", type="str",
-                      help="RPM package name",
-                      default="")
 
-
-    for index, arg in enumerate(sys.argv):
-        sys.argv[index] = arg.decode(sys.getfilesystemencoding())
+    sys.argv = args_to_unicode(sys.argv)
 
     (options, args) = parser.parse_args()
     xc = XMvnConfig()
 
-    if options.name:
-        xc.add_custom_option("installerSettings/packageName", options.name)
+    if options.gradle:
+        base_goal = "build"
+        mvn_args = ["gradle-local", "--no-daemon"]
+    else:
+        base_goal = "verify"
+        mvn_args = ["xmvn", "--batch-mode"]
 
-    base_goal="verify"
-    mvn_args = ["xmvn", "--batch-mode"]
+    if not command_exists(mvn_args[0]):
+        if options.gradle:
+            print("gradle-local package is not installed, please install it to proceed", file=sys.stderr)
+        else:
+            # xmvn command is provided by xmvn package, but maven-local
+            # pulls in bunch of maven plugins which may come handy
+            print("maven-local package is not installed, please install it to proceed", file=sys.stderr)
+        sys.exit(1)
 
     if not options.bootstrap:
-         mvn_args.append("--offline")
+        mvn_args.append("--offline")
 
     if options.disable_effective_poms:
         mvn_args.append("-Dxmvn.compat=20-rpmbuild-raw")
 
     if options.debug:
-        mvn_args.append("-X")
+        mvn_args.append("--debug")
 
     if options.xmvn_debug or options.debug:
-        xc.add_custom_option("resolverSettings/debug", 'true')
-        xc.add_custom_option("installerSettings/debug", 'true')
+        mvn_args.append("-Dorg.slf4j.simpleLogger.log.org.fedoraproject.xmvn=debug")
 
     if options.force:
         mvn_args.append("-Dmaven.test.skip=true")
         xc.add_custom_option("buildSettings/skipTests", "true")
-        base_goal="package"
+        if options.gradle:
+            base_goal = "assemble"
+        else:
+            base_goal = "package"
+
+    if mock_socket and os.path.exists(mock_socket):
+        interpreter = sys.executable
+        java_utils = os.path.dirname(os.path.abspath(__file__))
+        cmd = "%s %s/request-artifact.py" % (interpreter, java_utils)
+        mvn_args.append("-Dxmvn.resolver.requestArtifactCmd='%s'" % cmd)
 
     mvn_args.extend(args)
 
@@ -133,12 +152,21 @@ if __name__ == "__main__":
     mvn_args.append(base_goal)
 
     if not options.skip_install:
-        mvn_args.append("org.fedoraproject.xmvn:xmvn-mojo:install")
+        if options.gradle:
+            mvn_args.append("xmvnInstall")
+        else:
+            mvn_args.append("org.fedoraproject.xmvn:xmvn-mojo:install")
 
     if not options.skip_javadoc:
-        mvn_args.append("org.apache.maven.plugins:maven-javadoc-plugin:aggregate")
+        if options.gradle:
+            # Automatic javadoc generation for Gradle is not yet implemented in XMvn
+            pass
+        else:
+            mvn_args.append("org.apache.maven.plugins:maven-javadoc-plugin:aggregate")
 
-    mvn_args.append("org.fedoraproject.xmvn:xmvn-mojo:builddep")
+    if not options.gradle:
+        # Build dependency generation for Gradle is not yet implemented in XMvn
+        mvn_args.append("org.fedoraproject.xmvn:xmvn-mojo:builddep")
 
     if options.goal_after:
         mvn_args.extend(options.goal_after)
@@ -146,9 +174,12 @@ if __name__ == "__main__":
     if options.singleton:
         # make sure we don't install artifacts with non-empty classifiers
         xc.add_package_mapping(Artifact.from_mvn_str(":::*?:"), "__noinstall",
-                optional=True)
+                               optional=True)
         xc.add_package_mapping(Artifact.from_mvn_str(":{*}"), "@1")
 
+    print("Executing:", " ".join(mvn_args), file=sys.stderr)
+    print(mvn_args, file=sys.stderr)
+    sys.stderr.flush()
     p = subprocess.Popen(" ".join(mvn_args), shell=True, env=os.environ)
     p.wait()
 

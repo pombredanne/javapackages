@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2012-2013, Red Hat, Inc
+#
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -35,113 +35,63 @@
 # filesystem (i.e. %{_javadir})
 # rpm macro expects to find this file as %{_javadir}-utils/maven_depmap.py
 
+
 from optparse import OptionParser
-import sys
 import os
-import re
 import shutil
-from StringIO import StringIO
-import xml.dom.minidom
-import codecs
+import sys
 
 from os.path import basename, dirname
 import zipfile
 from time import gmtime, strftime
+from copy import deepcopy
 
-from lxml.etree import SubElement, Element, ElementTree, XMLParser
+from javapackages.maven.pom import POM
+from javapackages.metadata.artifact import MetadataArtifact
+from javapackages.metadata.alias import MetadataAlias
+from javapackages.metadata.metadata import Metadata
 
-from javapackages import POM, Artifact
-
-
-class Fragment:
-    """simple structure to hold fragment information"""
-    def __init__(self, upstream_artifact, local_artifact):
-        self.upstream_artifact = upstream_artifact
-        self.local_artifact = local_artifact
-
-    def __getitem__(self, index):
-        return self.__dict__[index]
+from javapackages.common.exception import JavaPackagesToolsException
 
 
-class PackagingTypeMissingFile(Exception):
+class PackagingTypeMissingFile(JavaPackagesToolsException):
     def __init__(self, pom_path):
         self.args=("Packaging type is not 'pom' and no artifact path has been provided for POM %s" % pom_path,)
 
-class IncompatibleFilenames(Exception):
+class IncompatibleFilenames(JavaPackagesToolsException):
     def __init__(self, pom_path, jar_path):
         self.args=("Filenames of POM %s and JAR %s does not match properly. Check that JAR subdirectories matches '.' in pom name." % (pom_path, jar_path),)
 
-class MissingJarFile(Exception):
+class ExtensionsDontMatch(JavaPackagesToolsException):
+    def __init__(self, coordinates_ext, file_ext):
+        self.args=("Extensions don't match: '%s' != '%s'" % (coordinates_ext, file_ext),)
+
+class MissingJarFile(JavaPackagesToolsException):
     def __init__(self):
         self.args=("JAR seems to be missing in standard directories. Make sure you have installed it",)
 
-class UnknownFileExtension(Exception):
+class UnknownFileExtension(JavaPackagesToolsException):
     def __init__(self, jar_path):
         self.args=("Unknown file extension: %s" % (jar_path),)
 
-def _get_javadir_part(jar_path, prefix):
-    # This is not nice, because macros can change but handling these
-    # in RPM macros is ugly as hell.
-    javadirs=[os.path.join(prefix, part) for part in ["share/java",
-                                                      "share/java-jni",
-                                                      "lib/java",
-                                                      "lib64/java"]]
-    jarpart = None
-    for jdir in javadirs:
-        if jdir in jar_path:
-            javadir_re = re.compile(".*%s/" % jdir)
-            jarpart = re.sub(javadir_re, "", jar_path)
-    if not jarpart:
-        raise MissingJarFile()
-    return jarpart
 
-def _get_jpp_from_filename(pom_path, prefix, jar_path = None, extension = "jar"):
-    """Get resolved (groupId,artifactId) tuple from POM and JAR path.
+def _print_path_with_dirs(path, base):
+    print(path)
+    path = dirname(path)
+    while path != base and path != '/':
+        print("%dir " + path)
+        path = dirname(path)
 
-    POM name and JAR name have to be compatible.
-    JPP.xbean-xbean-main.pom means groupId is "JPP/xbean" and artifactId
-    is "xbean-main". Therefore for JAR name to be compatible it has be
-    in %{_javadir}/xbean/xbean-main.jar.
-    """
-    pomname = basename(pom_path)
-    if jar_path:
-        if not os.path.isfile(jar_path):
-            raise IOError("JAR path doesn't exist")
-        jarpart = _get_javadir_part(jar_path, prefix)
 
-        if pomname[3] == '.':
-            if '/' not in jarpart:
-                raise IncompatibleFilenames(pom_path, jar_path)
-            jpp_gid = "JPP/%s" % dirname(jarpart)
-            jpp_aid = basename(jarpart[:-(len(extension)+1)])
-            # we assert that jar and pom parts match
-            if not pomname == "JPP.%s-%s.pom" % (jpp_gid[4:], jpp_aid):
-                raise IncompatibleFilenames(pom_path, jar_path)
-        else:
-            if '/' in jarpart:
-                raise IncompatibleFilenames(pom_path, jar_path)
-            jpp_gid = "JPP"
-            jpp_aid = basename(jarpart[:-(len(extension)+1)])
-            # we assert that jar and pom parts match
-            if not pomname == "JPP-%s.pom" % jpp_aid:
-                raise IncompatibleFilenames(pom_path, jar_path)
-    else:
-        if pomname[3] == ".":
-            match = re.match('JPP\.([^-]*?)-.*', pomname)
-            jpp_gid="JPP/%s" % match.group(1)
-            match = re.match('JPP\.[^-]*?-(.*)\.pom', pomname)
-            jpp_aid= match.group(1)
-        else:
-            jpp_gid = "JPP"
-            jpp_aid = pomname[4:-4]
-    return(jpp_gid, jpp_aid)
-
-def _make_files_versioned(versions, pom_path, jar_path):
+def _make_files_versioned(versions, pom_path, jar_path, pom_base, jar_base):
     """Make pom and jar file versioned"""
     versions = list(set(versions.split(',')))
 
     vpom_path = pom_path
     vjar_path = jar_path
+
+    ret_pom_path = pom_path
+    ret_jar_path = jar_path
 
     # pom
     if ':' not in vpom_path:
@@ -153,10 +103,11 @@ def _make_files_versioned(versions, pom_path, jar_path):
                 shutil.copy(os.path.realpath(vpom_path), dest)
                 symlink = True
                 vpom_path = dest
+                ret_pom_path = dest
             else:
                 os.symlink(basename(vpom_path), dest)
             # output file path for file lists
-            print dest
+            _print_path_with_dirs(dest, pom_base)
         # remove unversioned pom
         os.remove(pom_path)
 
@@ -170,131 +121,16 @@ def _make_files_versioned(versions, pom_path, jar_path):
                 shutil.copy(os.path.realpath(vjar_path), dest)
                 symlink = True
                 vjar_path = dest
+                ret_jar_path = dest
             else:
                 os.symlink(basename(vjar_path), dest)
             # output file path for file lists
-            print dest
+            _print_path_with_dirs(dest, jar_base)
         # remove unversioned jar
         os.remove(jar_path)
 
-def get_local_artifact(upstream_artifact, prefix, jar_path=None):
-    if not jar_path:
-        # does this even make sense? There is no pom, no dependencies...
-        return Artifact("JPP", upstream_artifact.artifactId,
-                        upstream_artifact.extension,
-                        upstream_artifact.classifier,
-                        upstream_artifact.version)
-
-    jarpart = _get_javadir_part(jar_path, prefix)
-    local_gid = "JPP"
-    if '/' in jarpart:
-        local_gid = "JPP/{gid}".format(gid=dirname(jarpart))
-
-    ext = upstream_artifact.extension
-    if not ext:
-        ext = "jar"
-
-    if not jarpart.endswith(".{ext}".format(ext=ext)):
-        raise IncompatibleFilenames(str(upstream_artifact), jar_path)
-
-    fname = basename(jarpart).replace(".{ext}".format(ext=ext),
-                                      "")
-
-    local_aid = fname
-    if upstream_artifact.classifier:
-        local_aid = fname[:fname.rfind('-')]
-        if fname[fname.rfind('-')+1:] != upstream_artifact.classifier:
-            raise IncompatibleFilenames(str(upstream_artifact), jar_path)
-    return Artifact(local_gid, local_aid, upstream_artifact.extension,
-                    upstream_artifact.classifier, upstream_artifact.version)
-
-
-def parse_pom(pom_file, prefix, jar_file = None):
-    """Returns Fragment class or None if POM file is invalid"""
-    pom = POM(pom_file)
-
-    extension = ''
-    # if project packaging is undefined => jar
-    # only "pom" packaging type can be without jar_file path otherwise
-    # we bail
-    if not jar_file:
-        if not pom.packaging or pom.packaging != "pom":
-            raise PackagingTypeMissingFile(pom_path)
-        extension = 'pom'
-    else:
-        # let's just take last part of filename as extension
-        fname, ext = os.path.splitext(jar_path)
-        extension = ext[1:]
-
-    jpp_gid, jpp_aid = _get_jpp_from_filename(pom_file, prefix, jar_file, extension)
-
-    if extension == "jar":
-        extension = ''
-
-    upstream_artifact = Artifact(pom.groupId, pom.artifactId, extension=extension, version=pom.version)
-    local_artifact = Artifact(jpp_gid, jpp_aid, extension)
-    return Fragment(upstream_artifact, local_artifact)
-
-def create_mappings(fragment, additions=None, namespace=""):
-    fragment.upstream_artifact.namespace = namespace
-    fragment.local_artifact.namespace = namespace
-    maps = [fragment]
-    if additions:
-        adds = additions.split(',')
-        for add in adds:
-            mpart = Artifact.from_mvn_str(add)
-            full = Artifact.merge_artifacts(mpart, fragment.upstream_artifact)
-            maps.append(Fragment(full, fragment.local_artifact))
-    return maps
-
-def prettify_element(elem):
-    xmlbuf = StringIO()
-    et = ElementTree()
-    et._setroot(elem)
-    et.write(xmlbuf,
-             xml_declaration=True,
-             encoding = 'utf-8',
-             method = "xml")
-    return xml.dom.minidom.parseString(xmlbuf.getvalue()).toprettyxml()
-
-def output_fragment(fragment_path, fragment, mappings, add_versions):
-    """Writes fragment into fragment_path in specialised format
-    compatible with jpp"""
-    root = None
-    try:
-        et = ElementTree()
-        parser = XMLParser(remove_blank_text=True)
-        root = et.parse(fragment_path, parser=parser)
-    except IOError:
-        root = Element("dependencyMap")
-
-    if not add_versions:
-        versions = set()
-    else:
-        versions = set(add_versions.split(','))
-
-    if add_versions or add_versions == "":
-        # skip RPM provides in compat packages
-        SubElement(root, "skipProvides")
-
-    versions.add(fragment.upstream_artifact.version)
-    versions = list(versions)
-    for ver in sorted(versions):
-        for fragment in mappings:
-            dep = SubElement(root, "dependency")
-            if add_versions or add_versions == "":
-                fragment.local_artifact.version = ver
-            else:
-                fragment.local_artifact.version = ""
-            mvn_xml = fragment.upstream_artifact.get_xml_element(root="maven")
-            local_xml = fragment.local_artifact.get_xml_element(root="jpp")
-
-            dep.append(mvn_xml)
-            dep.append(local_xml)
-    xmlstr = prettify_element(root)
-    with codecs.open(fragment_path, 'w', "utf-8") as fout:
-        fout.write(xmlstr)
-
+    # return paths to versioned, but regular files (not symlinks)
+    return ret_pom_path, ret_jar_path
 
 
 # Add a file to a ZIP archive (or JAR, WAR, ...) unless the file
@@ -303,32 +139,26 @@ def append_if_missing(archive_name, file_name, file_contents):
     archive = zipfile.ZipFile(archive_name, 'a')
     try:
         if file_name not in archive.namelist():
-            path = os.path.dirname(file_name)
-            while True:
-                if not path:
-                    break
-                subdir = path + os.path.sep
-                if subdir not in archive.namelist():
-                    archive.writestr(subdir, '')
-                path, tail = os.path.split(path)
             archive.writestr(file_name, file_contents)
     finally:
         archive.close()
 
+
 # Inject pom.properties if JAR doesn't have one.  This is necessary to
 # identify the origin of JAR files that are present in the repository.
-def inject_pom_properties(jar_path, fragment):
-    props_path = "META-INF/maven/{f.groupId}/{f.artifactId}/pom.properties".format(f=fragment.upstream_artifact)
+def inject_pom_properties(jar_path, artifact):
+    if not zipfile.is_zipfile(jar_path):
+        return
+    props_path = "META-INF/maven/{a.groupId}/{a.artifactId}/pom.properties".format(a=artifact)
     timestamp = strftime("%a %b %d %H:%M:%S UTC %Y", gmtime())
     properties = """#Generated by Java Packages Tools
 #{timestamp}
-version={f.upstream_artifact.version}
-groupId={f.upstream_artifact.groupId}
-artifactId={f.upstream_artifact.artifactId}
+version={a.version}
+groupId={a.groupId}
+artifactId={a.artifactId}
 """.format(timestamp=timestamp,
-           f=fragment)
+           a=artifact)
 
-    artifact = fragment.upstream_artifact
     if artifact.extension:
         properties = properties + \
             "extension={ext}\n".format(ext=artifact.extension)
@@ -338,9 +168,44 @@ artifactId={f.upstream_artifact.artifactId}
 
     append_if_missing(jar_path, props_path, properties)
 
-if __name__ == "__main__":
 
-    usage="usage: %prog [options] fragment_path pom_path|<MVN spec> [jar_path]"
+def add_compat_versions(artifact, versions):
+    if not versions:
+        return artifact
+
+    artifact.compatVersions = versions.split(',')
+    return artifact
+
+
+def add_aliases(artifact, additions):
+    if not additions:
+        return artifact
+
+    aliases = additions.split(',')
+    result = set()
+    for a in aliases:
+        alias = MetadataAlias.from_mvn_str(a)
+        alias.extension = artifact.extension
+        result.add(alias)
+
+    artifact.aliases = result
+    return artifact
+
+
+def write_metadata(metadata_file, artifacts):
+    if os.path.exists(metadata_file):
+        metadata = Metadata.create_from_file(metadata_file)
+    else:
+        metadata = Metadata()
+
+    # pylint:disable=E1103
+    metadata.artifacts += deepcopy(artifacts)
+
+    metadata.write_to_file(metadata_file)
+
+
+def _main():
+    usage="usage: %prog [options] metadata_path pom_path|<MVN spec> [jar_path]"
     parser = OptionParser(usage=usage)
     parser.add_option("-a","--append",type="str",
                       help="Additional depmaps to add (gid:aid)  [default: %default]")
@@ -348,10 +213,10 @@ if __name__ == "__main__":
                       help='Additional versions to add for each depmap')
     parser.add_option('-n', '--namespace', type="str",
                       help='Namespace to use for generated fragments', default="")
-    parser.add_option('-p', '--prefix', type="str",
-                      help='Prefix where artifacts are expected to be installed', default="/")
-
-
+    parser.add_option('--pom-base', type="str",
+                      help='Base path under which POM files are installed', default="")
+    parser.add_option('--jar-base', type="str",
+                      help='Base path under which JAR files are installed', default="")
 
     parser.set_defaults(append=None)
 
@@ -359,54 +224,95 @@ if __name__ == "__main__":
     append_deps = options.append
     add_versions = options.versions
     namespace = options.namespace
-    prefix = options.prefix
+    pom_base = options.pom_base
+    jar_base = options.jar_base
 
     if len(args) < 2:
         parser.error("Incorrect number of arguments")
     # These will fail when incorrect number of arguments is given.
-    fragment_path = args[0].strip()
+    metadata_path = args[0].strip()
     pom_path = args[1].strip()
     jar_path = None
 
+    artifact = None
+    have_pom = False
+
     if len(args) == 3:
         jar_path = args[2].strip()
-        local = None
-        fragment = None
         if ':' in pom_path:
             pom_str = pom_path.rsplit('/')[-1]
-            upstream = Artifact.from_mvn_str(pom_str)
-            if upstream.extension == 'jar':
-                upstream.extension = ''
-            if not upstream.version:
+            artifact = MetadataArtifact.from_mvn_str(pom_str)
+            artifact_ext = artifact.extension or "jar"
+            file_ext = os.path.splitext(jar_path)[1][1:]
+            if artifact_ext != file_ext:
+                raise ExtensionsDontMatch(artifact_ext, file_ext)
+
+            if artifact.extension == 'jar':
+                artifact.extension = ''
+
+            if not artifact.version:
                 parser.error("Artifact definition has to include version")
-            local = get_local_artifact(upstream, prefix, jar_path)
-            fragment = Fragment(upstream, local)
         else:
-            fragment = parse_pom(pom_path, prefix, jar_path)
-        if fragment:
-            inject_pom_properties(jar_path, fragment)
+            artifact = MetadataArtifact.from_pom(pom_path)
+            ext = os.path.splitext(jar_path)[1][1:]
+            if ext != "jar":
+                artifact.extension = ext
+            have_pom = True
+        if artifact:
+            inject_pom_properties(jar_path, artifact)
     else:
-        fragment = parse_pom(pom_path, prefix)
+        # looks like POM only artifact
+        if ':' not in pom_path:
+            artifact = MetadataArtifact.from_pom(pom_path)
+            have_pom = True
+
+            if POM(pom_path).packaging != "pom":
+                raise PackagingTypeMissingFile(pom_path)
+        else:
+            sys.exit("JAR file path must be specified when using artifact coordinates")
+
 
     # output file path for file lists
-    print fragment_path
+    print(metadata_path)
 
-    if fragment:
-        mappings = create_mappings(fragment, append_deps, namespace)
-        output_fragment(fragment_path, fragment, mappings, add_versions)
+    artifact = add_compat_versions(artifact, add_versions)
+    if add_versions:
+        pom_path, jar_path = _make_files_versioned(add_versions, pom_path, jar_path, pom_base, jar_base)
 
-        if add_versions:
-            add_versions = "%s,%s" % (fragment.upstream_artifact.version, add_versions)
-            _make_files_versioned(add_versions, pom_path, jar_path)
-        else:
-            # output file paths for file lists
-            if ':' not in pom_path:
-                print pom_path
-            if jar_path:
-                print jar_path
+    if namespace:
+        artifact.namespace = namespace
 
-    else:
-        parser.error("Problem parsing POM file. Is it valid maven POM? Send bugreport \
-        to https://fedorahosted.org/javapackages/ and attach %s to \
-        this bugreport" % pom_path)
-        sys.exit(1)
+    artifact.properties["xmvn.resolver.disableEffectivePom"] = "true"
+
+
+    buildroot = os.environ.get('RPM_BUILD_ROOT')
+    am = []
+    if jar_path:
+        metadata_jar_path = os.path.abspath(jar_path)
+        artifact.path = metadata_jar_path.replace(buildroot, "") if buildroot else metadata_jar_path
+        artifact = add_aliases(artifact, append_deps)
+        if artifact.extension == "jar":
+            artifact.extension = ""
+        am.append(artifact.copy())
+        # output file path for file list (if it's not versioned)
+        if not add_versions:
+            _print_path_with_dirs(jar_path, jar_base)
+    if have_pom:
+        metadata_pom_path = os.path.abspath(pom_path)
+        artifact.path = metadata_pom_path.replace(buildroot, "") if buildroot else metadata_pom_path
+        artifact.extension = "pom"
+        artifact.aliases = None
+        artifact = add_aliases(artifact, append_deps)
+        am.append(artifact.copy())
+        # output file path for file list (if it's not versioned)
+        if not add_versions:
+            _print_path_with_dirs(pom_path, pom_base)
+
+    write_metadata(metadata_path, am)
+
+
+if __name__ == "__main__":
+    try:
+        _main()
+    except JavaPackagesToolsException as e:
+        sys.exit(e)

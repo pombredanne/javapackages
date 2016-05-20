@@ -1,7 +1,7 @@
 import unittest
 import shutil
 import os
-from test_common import xmvnconfig, get_actual_args, get_expected_args, \
+from test_common import javautils_script, get_actual_args, get_expected_args, \
         get_config_file_list, get_actual_config, get_expected_config, DIRPATH
 from xml_compare import compare_xml_files
 
@@ -22,153 +22,121 @@ class TestMvnBuild(unittest.TestCase):
             pass
         os.chdir(self.olddir)
 
-    @xmvnconfig('mvn_build', ['-h'])
+    @javautils_script('mvn_build', ['-h'])
     def test_help(self, stdout, stderr, return_value):
         self.assertTrue(stdout)
 
-    @xmvnconfig('mvn_build',[])
+    @javautils_script('mvn_build',[])
     def test_run_no_args(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'run_no_args'))
 
-    @xmvnconfig('mvn_build',['-b', ])
+    @javautils_script('mvn_build',['-b', ])
     def test_bootstrap(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'bootstrap'))
 
-    @xmvnconfig('mvn_build',['-d', ])
+    @javautils_script('mvn_build',['-d', ])
     def test_xmvn_debug(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'xmvn_debug'))
 
-    @xmvnconfig('mvn_build',['-d', ])
-    def test_xmvn_debug1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 2)
-        for filename in filelist:
-            report = compare_xml_files(get_actual_config(filename),
-                 get_expected_config(filename, 'mvn_build', 'xmvn_debug1'),
-                 ['artifactGlob'])
-            self.assertFalse(report, '\n' + report)
-
-    @xmvnconfig('mvn_build',['-f', ])
+    @javautils_script('mvn_build',['-f', ])
     def test_force(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'force'))
 
-    @xmvnconfig('mvn_build',['-f', ])
+    @javautils_script('mvn_build',['-f', ])
     def test_force1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
+        self.assertEqual(return_value, 0, stderr)
         filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 1)
+        self.assertEqual(len(filelist), 1)
         for filename in filelist:
             report = compare_xml_files(get_actual_config(filename),
                  get_expected_config(filename, 'mvn_build', 'force1'),
                  ['artifactGlob'])
             self.assertFalse(report, '\n' + report)
 
-    @xmvnconfig('mvn_build',['-g', ])
+    @javautils_script('mvn_build',['-g', 'validate'])
     def test_goal_before(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'goal_before'))
 
-    @xmvnconfig('mvn_build',['-G', ])
+    @javautils_script('mvn_build',['-G', 'integration-test'])
     def test_goal_after(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'goal_after'))
 
-    @xmvnconfig('mvn_build',['-i', ])
+    @javautils_script('mvn_build',['-i', ])
     def test_skip_install(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'skip_install'))
 
-    @xmvnconfig('mvn_build',['-j', ])
+    @javautils_script('mvn_build',['-j', ])
     def test_skip_javadoc(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'skip_javadoc'))
 
-    @xmvnconfig('mvn_build',['-s', ])
+    @javautils_script('mvn_build',['-s', ])
     def test_singleton(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'singleton'))
 
-    @xmvnconfig('mvn_build',['-s', ])
+    @javautils_script('mvn_build',['-s', ])
     def test_singleton1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
+        self.assertEqual(return_value, 0, stderr)
         filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 2)
+        self.assertEqual(len(filelist), 2)
         for filename in filelist:
             report = compare_xml_files(get_actual_config(filename),
                  get_expected_config(filename, 'mvn_build', 'singleton1'),
                  ['artifactGlob'])
             self.assertFalse(report, '\n' + report)
 
-    @xmvnconfig('mvn_build',['-X', ])
+    @javautils_script('mvn_build',['-X', ])
     def test_debug(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'debug'))
 
-    @xmvnconfig('mvn_build',['-X', ])
-    def test_debug1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 2)
-        for filename in filelist:
-            report = compare_xml_files(get_actual_config(filename),
-                 get_expected_config(filename, 'mvn_build', 'debug1'),
-                 ['artifactGlob'])
-            self.assertFalse(report, '\n' + report)
-
-    @xmvnconfig('mvn_build',['-ji', ])
+    @javautils_script('mvn_build',['-ji', ])
     def test_skip_both(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'skip_both'))
 
-    @xmvnconfig('mvn_build',['-n', 'pkgname', ])
-    def test_name(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 1)
-        for filename in filelist:
-            report = compare_xml_files(get_actual_config(filename),
-                 get_expected_config(filename, 'mvn_build', 'name'),
-                 ['artifactGlob'])
-            self.assertFalse(report, '\n' + report)
-
-    @xmvnconfig('mvn_build',['-n', 'pkgname', ])
-    def test_name1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
-                get_expected_args('mvn_build', 'name1'))
-
-    @xmvnconfig('mvn_build',['-dfijsX', ])
+    @javautils_script('mvn_build',['-dfijsX', ])
     def test_all(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
-        self.assertEquals(get_actual_args(),
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
                 get_expected_args('mvn_build', 'all'))
 
-    @xmvnconfig('mvn_build',['-dfijsX', ])
+    @javautils_script('mvn_build',['-dfijsX', ])
     def test_all1(self, stdout, stderr, return_value):
-        self.assertEquals(return_value, 0)
+        self.assertEqual(return_value, 0, stderr)
         filelist = get_config_file_list()
-        self.assertEquals(len(filelist), 5)
+        self.assertEqual(len(filelist), 3)
         for filename in filelist:
             report = compare_xml_files(get_actual_config(filename),
                  get_expected_config(filename, 'mvn_build', 'all1'),
                  ['artifactGlob'])
             self.assertFalse(report, '\n' + report)
+
+    @javautils_script('mvn_build',['-g', 'validate', 'compile', '-G',
+                             'integration-test', 'verify'])
+    def test_more_goals(self, stdout, stderr, return_value):
+        self.assertEqual(return_value, 0, stderr)
+        self.assertEqual(get_actual_args(),
+                get_expected_args('mvn_build', 'more_goals'))
 
 if __name__ == '__main__':
     unittest.main()

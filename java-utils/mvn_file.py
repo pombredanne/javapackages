@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2013, Red Hat, Inc
+#
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,16 +33,19 @@
 import optparse
 import sys
 
-from javapackages.artifact import (Artifact, ArtifactFormatException,
-                                   ArtifactValidationException)
-from javapackages.xmvn_config import XMvnConfig
+from javapackages.maven.artifact import (Artifact, ArtifactFormatException,
+                                         ArtifactValidationException)
+from javapackages.xmvn.xmvn_config import XMvnConfig, XMvnConfigException
+from javapackages.common.util import args_to_unicode
+from javapackages.common.exception import JavaPackagesToolsException
+
 
 class SaneParser(optparse.OptionParser):
     def format_epilog(self, formatter):
         return self.epilog
 
-usage="usage: %prog [options] <MVN spec> path [path ...]"
-epilog="""
+usage = "usage: %prog [options] <MVN spec> path [path ...]"
+epilog = """
 MVN spec:
 Specification of Maven artifact in following format:
 
@@ -61,12 +64,7 @@ commons-lang:commons-lang:war:test-jar:3.1
 if __name__ == "__main__":
     parser = SaneParser(usage=usage,
                         epilog=epilog)
-    parser.add_option("-p", "--prefix",
-                      help="Set prefix for converting absolute paths to "+
-                           "relative",
-                      default="/usr/share/java")
-    for index, arg in enumerate(sys.argv):
-        sys.argv[index] = arg.decode(sys.getfilesystemencoding())
+    sys.argv = args_to_unicode(sys.argv)
 
     (options, args) = parser.parse_args()
     if len(args) < 2:
@@ -75,8 +73,13 @@ if __name__ == "__main__":
     try:
         orig = Artifact.from_mvn_str(args[0])
         orig.validate(allow_backref=False)
-        XMvnConfig().add_file_mapping(orig, args[1:], options.prefix)
-    except (ArtifactValidationException, ArtifactFormatException), e:
+        XMvnConfig().add_file_mapping(orig, args[1:])
+    except (ArtifactValidationException, ArtifactFormatException) as e:
         parser.error("{e}: Provided artifact strings were invalid. "
                      "Please see help  and check your arguments".format(e=e))
         sys.exit(1)
+    except XMvnConfigException as e:
+        parser.error("Incorrect configuration: {e}".format(e=e))
+        sys.exit(1)
+    except JavaPackagesToolsException as e:
+        sys.exit(e)

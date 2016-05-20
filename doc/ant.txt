@@ -10,56 +10,150 @@ Maven. The main difference between these two tools is that Ant is procedural and
 Maven is declarative. When using Ant, it is neccessary to exactly describe the
 processes which lead to the result. It means that one needs to specify where the
 source files are, what needs to be done and when it needs to be done. On the
-other hand, Maven has some conventions. For most common tasks all that needs to
-be done is to create simple `pom.xml` file.
+other hand, Maven relies on conventions and doesn't require specifying most
+of the process unless you need to override the defaults.
 
 
-.Common spec file sections
+If upstream ships a Maven POM file, it must be installed even if you
+don't build with Maven. If not you should try to search Maven Central
+Repository for it, ship it as another source and install it.
+
+.Common spec file
 [source,spec]
---------
-BuildRequires:  ant
+-------------
+BuildRequires: ant
+BuildRequires: javapackages-local
 ...
 %build
-# build the project and run test suite
 ant test
 
 %install
-install -d -m 755 %{buildroot}%{_javadir}
-install -d -m 755 %{buildroot}%{_mavenpomdir}
-install -d -m 755 %{buildroot}%{_javadocdir}/%{name}
+%mvn_artifact pom.xml lib/%{name}.jar
 
-# install jar
-install -p -m 644 lib/sample.jar %{buildroot}%{_javadir}/%{name}.jar
-
-# pom
-install -pm 644 pom.xml %{buildroot}%{_mavenpomdir}/JPP-%{name}.pom
-%add_maven_depmap JPP.%{name}.pom %{name}.jar
-
-# javadoc
-cp -pr api/* %{buildroot}%{_javadocdir}/%{name}
+%mvn_install -J api/
 
 %files -f .mfiles
 %dir %{_javadir}/%{name}
 
-%files javadoc
-%doc %{_javadocdir}/%{name}
--------
+%files javadoc -f .mfiles-javadoc
+------
 
-Notable details:
+Details:
 
-  - `%build` section uses `ant` command to build the project and run the tests.
-  - package maintainer needs to create all necessarry directories in `%install`
-    section
-  - all JAR, POM files and generated Javadoc documentation needs to be manually
-    installed
-  - `%add_maven_depmap` macro is used. This macro generates depmap file for
-    specified JAR and POM file. For more information see Depmap section.
-  - pacakge can use generated file `.mfiles` to populate `%files` section with
-    `-f` switch. However, javadoc subpackage needs to explicitly list the files.
+    - `%build` section uses `ant` command to build the project and run the
+      tests. The used target(s) may vary depending on the `build.xml`
+      file. You can use `ant -p` command to list the project info or
+      manually look for `<target>` nodes in the `build.xml` file
+    - `%mvn_artifact` macro is used to request installation of an
+      artifact that was not built using Maven. It expects a POM file and
+      a JAR file. For POM only artifacts, the JAR part is omitted. +
+      See <<mvn_artifact,Installing additional artifacts>> for more
+      information
+    - `%mvn_install` performs the actual installation. Optional `-J`
+      parameter requests installation of generated Javadoc from given
+      directory
+    - This method of artifact installation allows using other XMvn
+      macros such as `%mvn_alias` or `%mvn_package`
+    - `%mvn_install` generates `.mfiles` file which should be used to
+      populate `%files` section with `-f` switch. For each subpackage
+      there would be separate generated file named
+      `.mfiles-subpackage-name`
+    - All packages are required to own directories which they create
+      (and which are not owned by other packages). JAR files are by
+      default installed into subdirectory of `%{_javadir}`. To override
+      this behavior, use `%mvn_file`
 
-[TIP]
-======
-`%mvn_artifact` macro can simplify some of the steps above. See
-<<mvn_artifact,Installing additional section>> for more information.
-======
 
+=== Apache Ivy
+
+Apache Ivy provides an automatic dependency management for Ant managed
+builds. It uses Maven repositories for retrieving artifacts and supports
+many declarative features of Maven such as handling transitive
+dependencies.
+
+XMvn supports local resolution of Ivy artifacts, their installation
+and requires generation.
+
+
+.Spec file
+[source, spec]
+--------------
+BuildRequires: ivy-local
+...
+%build
+ant -Divy.mode=local test
+
+%install
+%mvn_artifact ivy.xml lib/sample.jar
+
+%mvn_install -J api/
+
+%files -f .mfiles
+%files -javadoc -f .mfiles-javadoc
+--------
+
+Details:
+
+    - `-Divy.mode=local` tells Ivy to use XMvn local artifact
+      resolution instead of downloading from the Internet
+    - If there is an `ivy-settings.xml` or similar file, which specifies
+      remote repositories, it needs to be disabled, otherwise it would
+      override local resolution.
+    - `%mvn_artifact` supports installing artifacts described by Ivy
+      configuration files
+    - `%mvn_install` performs the actual installation. Optional `-J`
+      parameter requests installation of generated Javadoc from given
+      directory
+
+.Ivy files manipulation
+A subset of macros used to modify Maven POMs also work with `ivy.xml`
+files allowing the maintainer to add/remove/change dependencies without
+the need of making patches and rebasing them with each change.
+You can use dependency handling macros `%pom_add_dep`,
+`%pom_remove_dep`, `%pom_change_dep` and generic `%pom_xpath_*` macros.
+For more details, see corresponding manpages.
+
+[source,spec]
+-----
+# Remove dependency on artifact with org="com.example" and
+# name="java-project" from ivy.xml file in current directory
+%pom_remove_dep com.example:java-project
+
+# Add dependency on artifact with org="com.example" and
+# name="foobar" to ./submodule/ivy.xml
+%pom_add_dep com.example:foobar submodule
+-----
+
+.Using the `ivy:publish` task
+Ivy supports publishing built artifact with `ivy:publish` task. If your
+`build.xml` file already contains a task that calls `ivy:publish`, you
+can set the resolver attribute of the `ivy:publish` element to `xmvn`.
+This can be done with simple `%pom_xpath_set` call.  Then when the task
+is run, XMvn can pick the published artifacts and install them during
+the run of `%mvn_install` without needing you to manually specify them
+with
+`%mvn_artifact`.
+
+.Spec file using the `ivy:publish` task
+[source,spec]
+-------------
+BuildRequires: ivy-local
+....
+%prep
+%pom_xpath_set ivy:publish/@resolver xmvn build.xml
+
+%build
+ant -Divy.mode=local test publish-local
+
+%install
+%mvn_install -J api/
+
+%files -f .mfiles
+%files -javadoc -f .mfiles-javadoc
+-------------
+
+Details:
+
+    - The publish target may be named differently. Search the `build.xml`
+      for occurences of `ivy:publish`.
+    - `%mvn_install` will install all the published artifacts.

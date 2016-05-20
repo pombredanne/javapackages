@@ -1,16 +1,25 @@
 <?xml version="1.0" ?>
-<dependencyMap>
-  <dependency>
-    <maven>
-      <artifactId>commons-war</artifactId>
-      <groupId>commons</groupId>
-      <extension>war</extension>
-      <version>17</version>
-    </maven>
-    <jpp>
-      <artifactId>commons-war</artifactId>
-      <groupId>JPP</groupId>
-      <extension>war</extension>
-    </jpp>
-  </dependency>
-</dependencyMap>
+<ns1:metadata xmlns:ns1="http://fedorahosted.org/xmvn/METADATA/2.3.0">
+   <ns1:artifacts>
+      <ns1:artifact>
+         <ns1:groupId>commons</ns1:groupId>
+         <ns1:artifactId>commons-war</ns1:artifactId>
+         <ns1:version>17</ns1:version>
+         <ns1:extension>war</ns1:extension>
+         <ns1:path>%s/usr/share/java/commons-war.war</ns1:path>
+         <ns1:properties>
+            <xmvn.resolver.disableEffectivePom>true</xmvn.resolver.disableEffectivePom>
+         </ns1:properties>
+      </ns1:artifact>
+      <ns1:artifact>
+         <ns1:groupId>commons</ns1:groupId>
+         <ns1:artifactId>commons-war</ns1:artifactId>
+         <ns1:extension>pom</ns1:extension>
+         <ns1:version>17</ns1:version>
+         <ns1:path>%s/JPP-commons-war.pom</ns1:path>
+         <ns1:properties>
+            <xmvn.resolver.disableEffectivePom>true</xmvn.resolver.disableEffectivePom>
+         </ns1:properties>
+      </ns1:artifact>
+   </ns1:artifacts>
+</ns1:metadata>

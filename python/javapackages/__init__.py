@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#
 # Copyright (c) 2013, Red Hat, Inc
 # All rights reserved.
 #
@@ -32,17 +32,14 @@
 """
 Module for handling, manipulating and querying various files related to Java
 packaging in Linux distributions.
-
-Two main file types handled are:
-  - Apache Maven pom.xml files
-  - Depmap files used for mapping between Maven artifacts and local files
-
-See pom and depmap modules for more information
 """
 
-__all__ = ["Depmap", "POM", "Artifact", "XMvnConfig"]
 
-from javapackages.depmap import Depmap
-from javapackages.pom import POM
-from javapackages.artifact import Artifact
-from javapackages.xmvn_config import XMvnConfig
+try:
+    from javapackages.version import __version__
+except ImportError:
+    import os
+    dirpath = os.path.dirname(os.path.realpath(__file__))
+    versionpath = os.path.join(dirpath, '..', '..', 'VERSION')
+    with open(versionpath) as vp:
+        __version__ = vp.read().strip()

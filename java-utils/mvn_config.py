@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2013, Red Hat, Inc
+#
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,14 +33,17 @@
 import sys
 import optparse
 
-from javapackages.xmvn_config import XMvnConfig
+from javapackages.xmvn.xmvn_config import XMvnConfig
+from javapackages.common.util import args_to_unicode
+from javapackages.common.exception import JavaPackagesToolsException
+
 
 class SaneParser(optparse.OptionParser):
     def format_epilog(self, formatter):
         return self.epilog
 
-usage="usage: %prog [options] <optionstr> <content>"
-epilog="""
+usage = "usage: %prog [options] <optionstr> <content>"
+epilog = """
 Add custom configuration option
 
 optionstr -- XPath-like expression for specifying XMvn configuration
@@ -57,11 +60,13 @@ content -- XML content to be added to specified node. Can be just text, XML node
 if __name__ == "__main__":
     parser = SaneParser(usage=usage,
                         epilog=epilog)
-    for index, arg in enumerate(sys.argv):
-        sys.argv[index] = arg.decode(sys.getfilesystemencoding())
+    sys.argv = args_to_unicode(sys.argv)
 
     (options, args) = parser.parse_args()
     if len(args) != 2:
         parser.error("Exactly 2 arguments are required")
 
-    XMvnConfig().add_custom_option(args[0], args[1])
+    try:
+        XMvnConfig().add_custom_option(args[0], args[1])
+    except JavaPackagesToolsException as e:
+        sys.exit(e)

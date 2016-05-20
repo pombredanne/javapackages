@@ -1,15 +1,15 @@
-<dependencyMap>
-  <dependency>
-    <maven>
-      <artifactId>a</artifactId>
-      <groupId>g</groupId>
-      <extension>pom</extension>
-      <version>1</version>
-    </maven>
-    <jpp>
-      <artifactId>parent-version</artifactId>
-      <groupId>JPP</groupId>
-      <extension>pom</extension>
-    </jpp>
-  </dependency>
-</dependencyMap>
+<?xml version="1.0" ?>
+<ns1:metadata xmlns:ns1="http://fedorahosted.org/xmvn/METADATA/2.3.0">
+   <ns1:artifacts>
+      <ns1:artifact>
+         <ns1:groupId>g</ns1:groupId>
+         <ns1:artifactId>a</ns1:artifactId>
+         <ns1:extension>pom</ns1:extension>
+         <ns1:version>1</ns1:version>
+         <ns1:path>%s/JPP-parent-version.pom</ns1:path>
+         <ns1:properties>
+            <xmvn.resolver.disableEffectivePom>true</xmvn.resolver.disableEffectivePom>
+         </ns1:properties>
+      </ns1:artifact>
+   </ns1:artifacts>
+</ns1:metadata>

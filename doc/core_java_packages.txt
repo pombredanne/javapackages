@@ -1,6 +1,3 @@
-WORK IN PROGRESS
-mizdebsk, 25 Oct 2013
-
 ==== JVM
 
 Fedora allows multiple Java Virtual Machines (JVMs) to be packaged
@@ -11,7 +8,7 @@ depending of what Java funtionality is required.
 *`java-headless`*::
 
     This package provides a working Java Runtime Environment (JRE)
-    with some functionality didabled.  Graphics and audio support may
+    with some functionality disabled.  Graphics and audio support may
     be unavailable in this case.  `java-headless` provides
     functionality that is enough for most of packages and avoids
     pulling in a number of graphics and audio libraries as
@@ -51,10 +48,37 @@ non-zero epoch in order to keep version ordering correct.
 =======
 
 
-TODO
+==== Java Packages Tools
 
-* Java Packages Tools
-* Ant
-** extra tasks and /etc/ant.d
-* Maven
-** XMvn
+Java Packages Tools are packaged as severas binary RPM packages
+
+*`maven-local`*::
+
+    This package provides a complete environment which is required to
+    build Java packages using Apache Maven build system.  This
+    includes a default system version of Java Development Kit (JDK),
+    Maven, a number of Maven plugins commonly used to build packages,
+    various macros and utlilty tools.  `maven-local` is usually
+    declared as build dependency of Maven packages.
+
+*`gradle-local`*::
+
+    Similairly to `maven-local`, this package provides an environment
+    required to build Java packages using Gradle as a build tool.
+
+*`ivy-local`*::
+
+    Analogously to `maven-local` and `gradle-local`, this package
+    provides an environment required to build Java packages using
+    Apache Ivy as dependency manager.
+
+*`javapackages-local`*::
+
+    Package providing a basic environment necessary to geterate and
+    install metadata for system artifact repository.
+
+*`javapackages-tools`*::
+
+    Package owning basic Java directories and providing runtime
+    support for Java packages.  The great majority of Java packages
+    depend on `javapackages-tools`.

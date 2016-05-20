@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2012, Red Hat, Inc
+#!%{pyinterpreter}
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -30,146 +30,374 @@
 #
 # Authors:
 #   Stanislav Ochotnicky <sochotnicky@redhat.com>
-#
+#   Michal Srb <msrb@redhat.com>
 
 import os
+import re
 import sys
-import signal
 import traceback
-from javapackages import Depmap
 
-class TagBuilder:
-    def __init__ (self, filelist=None):
-        if filelist == None:
+from javapackages.common.config import get_config
+from javapackages.common.util import (kill_parent_process,
+                                      init_rpmgen,
+                                      get_logger)
+from javapackages.cache.metadata import MetadataCache
+from javapackages.maven.pom import POM
+from javapackages.maven.dependency import Dependency
+from javapackages.metadata.metadata import Metadata
+from javapackages.metadata.dependency import MetadataDependency
+from javapackages.xmvn.xmvn_resolve import XMvnResolve, ResolutionRequest
+
+_log = get_logger("maven.req")
+
+
+class TagBuilder(object):
+    def __init__(self, filelist=None):
+        if filelist is None:
             filelist = sys.stdin
-        paths = map (lambda x: x.rstrip (), filelist.readlines ())
-        self.provided_artifacts = []
-        self.skipped_artifacts = []
-        if paths:
-            # let's first read all fragment files for provided artifacts
-            fragment_dir = os.path.dirname(paths[0])
-            for dirname, dirnames, filenames in os.walk(fragment_dir):
-                for filename in filenames:
-                    if filename.endswith(".pom"):
-                        continue
-                    depmap = Depmap(os.path.join(dirname, filename))
-                    self.provided_artifacts.extend(depmap.get_provided_mappings())
-                    self.skipped_artifacts.extend(depmap.get_skipped_artifacts())
+
+        paths = [line.rstrip() for line in filelist.readlines()]
+        _log.info("input: {fl}".format(fl=paths))
+
+        self.config = self._get_config()
+        cache = MetadataCache(rpmconf)
+        self.provided_artifacts = cache.get_provided_artifacts()
+        self.skipped_artifacts = cache.get_skipped_artifacts()
+        self.provided_osgi = cache.get_provided_osgi()
+        self.metadata_dir = os.path.dirname(paths[0])
+
         for path in paths:
-            if path.endswith(".pom"):
-                continue
-            self.print_mvn_requires(path)
+            metadata = cache.get_metadata_for_path(path)
+            self.print_requires(metadata)
 
-    def __process_jvm_req(self, name, version):
-        if not version:
-            return
-        try:
-            jsplit = version.split('.')
-            if len(jsplit) != 2:
-                # if we don't have major.minor format, just ignore version
-                raise ValueError("Required Java version not in major.minor format")
-            major = int(jsplit[0])
-            minor = int(jsplit[1])
-            if major > 1 or minor > 5:
-                print("{name} >= 1:{major}.{minor}".format(name=name,
-                                                           major=major,
-                                                           minor=minor))
-            else:
-                print("{name} >= {major}.{minor}".format(name=name,
-                                                         major=major,
-                                                         minor=minor))
-        except ValueError:
-            # what? not a numbered major/minor java release?
-            print(name)
+            # generate also R on plugins and extensions from POM file, but only
+            # if this is POM-only package and xmvn-resolve is installed
+            if XMvnResolve.is_available():
+                if metadata.contains_only_poms():
+                    self.print_pom_requires(metadata)
 
+    def print_pom_requires(self, metadata):
+        """
+        Print Requires on plugins, extensions and parent POMs from POM files
+        """
 
-    def print_mvn_requires(self, path):
-        depmap = Depmap(path)
+        unresolvable = []
+        pom_requires = set()
+        for artifact in metadata.artifacts:
+            if artifact.path:
+                pom = POM(artifact.get_buildroot_path())
+                ppom = pom.parent
+
+                deps = []
+                reqs = []
+
+                # parent POM
+                if ppom:
+                    if not (ppom.groupId and ppom.artifactId and ppom.version):
+                        raise Exception("Not enough information to resolve "
+                                        "parent POM for artifact {g}:{a},"
+                                        .format(g=pom.groupId,
+                                                a=pom.artifactId),
+                                        "parent POM is: {pg}:{pa}:pom:{pv}"
+                                        .format(pg=ppom.groupId,
+                                                pa=ppom.artifactId,
+                                                pv=ppom.version))
+                    pom_dep = Dependency(ppom.groupId,
+                                         ppom.artifactId,
+                                         version=ppom.version,
+                                         extension="pom")
+                    deps.append(pom_dep)
+                    pom_req = ResolutionRequest(ppom.groupId,
+                                                ppom.artifactId,
+                                                version=ppom.version,
+                                                extension="pom")
+                    reqs.append(pom_req)
+
+                # plugins+extensions
+                deps.extend(pom.plugins + pom.extensions)
+
+                # create xmvn-resolve request for plugins and extensions, skip
+                # parent POM, if there is any - we already have request created
+                # for it
+                for d in (deps[1:] if ppom else deps):
+                    reqs.append(ResolutionRequest(d.groupId,
+                                                  d.artifactId,
+                                                  version=d.version))
+                # TODO: check metadata first
+                results = XMvnResolve.process_raw_request(reqs)
+
+                for i, r in enumerate(results):
+                    dep = MetadataDependency(deps[i].groupId,
+                                             deps[i].artifactId,
+                                             requestedVersion=deps[i].version,
+                                             namespace=rpmconf.scl or "")
+                    if isinstance(deps[i], Dependency):
+                        dep.extension = deps[i].extension
+
+                    # check if the dependency is provided by any of the
+                    # subpackages
+                    dver = dep.is_provided_by(self.provided_artifacts)[1]
+                    if dver is not None:
+                        # check if dependency is NOT provided by currently
+                        # processed subpackage
+                        if not dep.is_provided_by(metadata.artifacts)[0]:
+                            req_str = dep.get_rpm_str(pkg_ver=dver,
+                                                      namespace=artifact.namespace)
+                            pom_requires.add(req_str)
+                    elif r:
+                        # it's an external dependency
+                        if r.compatVersion != "SYSTEM":
+                            dep.resolvedVersion = r.compatVersion
+                        if r.namespace:
+                            dep.namespace = r.namespace
+                        pom_requires.add(dep.get_rpm_str())
+                    else:
+                        unresolvable.append(dep)
+                        continue
+
+        _log.info("from POM(s): {reqs}".format(reqs=", ".join(pom_requires)))
+        if pom_requires:
+            print("\n".join(pom_requires))
+
+        if unresolvable:
+            raise Exception("Unable to generate requires on unresolvable artifacts: {reqs}"
+                            .format(reqs=", ".join([x.get_mvn_str() for x in unresolvable])))
+
+    def print_requires(self, metadata):
+        """Print Requires from given metadata file."""
+
+        # dependencies most likely present in the buildroot (in the reactor),
+        # but not marked for installation. Therefore requires cannot be
+        # generated on them.
         skipped_but_required = []
-        base_package_requires=set()
 
-        for provided in depmap.get_provided_artifacts():
-            if provided.namespace:
-                base_package_requires.add("{ns}-runtime".format(ns=provided.namespace))
-            else:
-                base_package_requires.add("jpackage-utils")
-        for basereq in base_package_requires:
-            print basereq
-
+        # dependencies on unresolvable artifacts
         unknown_deps = []
-        for dependency in depmap.get_required_artifacts():
-            if dependency.version == "UNKNOWN":
+
+        # resulting requires
+        requires = set()
+
+        # always generate R on packages specified in config file
+        always_req = self.config.get('always_generate', ())
+        requires.update([x for x in always_req])
+
+        # check if dependencies on POM files are satisfiable
+        if XMvnResolve.is_available():
+            unknown_deps = self._check_pom_deps(metadata)
+
+        # process non-optional dependencies
+        for dependency in list(set(x for x in metadata.get_required_artifacts()
+                                   if not x.is_optional())):
+            if dependency.is_skipped(self.skipped_artifacts):
+                skipped_but_required.append(dependency)
+                continue
+            if dependency.resolvedVersion == "UNKNOWN":
                 unknown_deps.append(dependency)
                 continue
-            for skipped in self.skipped_artifacts:
-                if (skipped.groupId == dependency.groupId and
-                    skipped.artifactId == dependency.artifactId and
-                    skipped.classifier == dependency.classifier and
-                    skipped.extension == dependency.extension):
-                    skipped_but_required.append(skipped)
-            for m_provided, l_provided in self.provided_artifacts:
-                if (m_provided.groupId == dependency.groupId and
-                    m_provided.artifactId == dependency.artifactId and
-                    m_provided.classifier == dependency.classifier and
-                    m_provided.extension == dependency.extension and
-                    m_provided.namespace == dependency.namespace):
 
-                    # if dependency is versioned but another subpackage provides
-                    # non-versioned artifact, it's coming from a different package
-                    if (dependency.version and
-                        dependency.version != l_provided.version):
-                        continue
-
-                    # if dependency is not versioned but provides is versioned
-                    # the dependency is coming from a different package
-                    if not dependency.version and l_provided.version:
-                        continue
-
-                    # requires on subpackages are always versioned
-                    print("{rpmstr} = {version}".format(
-                        rpmstr=dependency.get_rpm_str(dependency.version),
-                        version=m_provided.version))
-                    break
-            else:
-                # TODO: remove when not needed
-                # do not generate requires like "a:b:pom:" yet
-                if dependency.extension == "pom":
-                    dependency.extension = ""
-                print(dependency.get_rpm_str(dependency.version))
+            self._generate_require(metadata, requires, dependency)
 
         if unknown_deps:
-            unknown_msg = "Following dependencies were not resolved and " \
-                          "requires cannot be generated. Either remove the " \
-                          "dependency from pom.xml or add proper packages to " \
-                          "BuildRequires:\n"
-            for unknown in unknown_deps:
-                unknown_msg = unknown_msg + \
-                            "{art}\n".format(art=unknown)
-            raise Exception(unknown_msg)
+            self._handle_unknown_deps(unknown_deps)
 
         if skipped_but_required:
-            skipped_msg = "Following artifacts were built " \
-                          "but are not being installed however other " \
-                          "artifacts require them. Either package these " \
-                          "artifacts or do not build them. To package " \
-                          "call %mvn_package in %prep:\n"
-            for skipped in skipped_but_required:
-                skipped_msg = skipped_msg + \
-                            "%mvn_package {art} <package_name>\n".format(art=skipped)
-            raise Exception(skipped_msg)
+            self._handle_skipped_but_required_deps(skipped_but_required)
 
-        reqs = {'java': depmap.get_java_requires(),
-                'java-devel': depmap.get_java_devel_requires()}
-        for name, version in reqs.iteritems():
-            self.__process_jvm_req(name, version)
+        requires.update(self._generate_java_requires(metadata))
+        requires = self._filter_requires(requires)
+
+        self._get_osgi_requires(metadata, requires)
+
+        _log.info(", ".join(requires))
+
+        # print resulting requires!
+        print('\n'.join(requires))
+
+    def _generate_require(self, metadata, requires, dependency):
+        # check if dependency is provided by any metadata file in buildroot
+        subpkg_dep, pkgver = dependency.is_provided_by(self.provided_artifacts)
+        if subpkg_dep:
+            # check if dependency isn't provided by same metadata file
+            if not dependency.is_provided_by(metadata.artifacts)[0]:
+                # requires on subpackages are always versioned
+                rpmstr = dependency.get_rpm_str(namespace=dependency.namespace,
+                                                compat_ver=dependency.resolvedVersion,
+                                                pkg_ver=pkgver)
+                requires.add(rpmstr)
+        else:
+            rpmstr = dependency.get_rpm_str(namespace=dependency.namespace,
+                                            compat_ver=dependency.resolvedVersion)
+            requires.add(rpmstr)
+
+
+    def _get_osgi_requires(self, metadata, requires):
+        """Read OSGi requires from metadata properties."""
+        osgi_reqs = metadata.get_osgi_requires()
+        osgi_provs = metadata.get_osgi_provides()
+        for req in osgi_reqs:
+            if req.bundle not in [x.bundle for x in self.provided_osgi]:
+                requires.add(req.get_rpm_str())
+            elif req.bundle not in [x.bundle for x in osgi_provs]:
+                for prov in self.provided_osgi:
+                    if prov.bundle == req.bundle:
+                        requires.add(req.get_rpm_str(version=prov.version,
+                                                     namespace=prov.namespace))
+                        break
+
+    def _handle_unknown_deps(self, unknown_deps):
+        unknown_msg = "Following dependencies were not resolved and " \
+                      "requires cannot be generated. Either remove the " \
+                      "dependencies from pom.xml or add proper packages to " \
+                      "BuildRequires:\n"
+        for unknown in unknown_deps:
+            required_by = self._find_what_requires(unknown)
+            if required_by:
+                unknown_msg += "{art} required by {req}\n".format(art=unknown,
+                                                                  req=required_by)
+            else:
+                unknown_msg += "{art}\n".format(art=unknown)
+        raise Exception(unknown_msg)
+
+    def _handle_skipped_but_required_deps(self, skipped_but_required):
+        skipped_msg = "Following artifacts were built, " \
+                      "but are not being installed. However, other " \
+                      "artifacts require them:\n"
+        for skipped in skipped_but_required:
+            required_by = self._find_what_requires(skipped)
+            if required_by:
+                skipped_msg += "{art} required by {req}\n".format(art=skipped,
+                                                                  req=required_by)
+            else:
+                skipped_msg += "{art}\n".format(art=skipped)
+        skipped_msg += "\nEither package these artifacts or do not "\
+                       "build them. To package them call %mvn_package "\
+                       "in %prep.\n"
+        raise Exception(skipped_msg)
+
+    def _generate_java_requires(self, metadata):
+        requires = set()
+        for rule_name, fn in (('java_requires', Metadata.get_java_requires),
+                              ('java_devel_requires', Metadata.get_java_devel_requires)):
+            rules = self.config.get(rule_name, {})
+            if not rules.get('skip', False):
+                req_versions = fn(metadata)
+                if req_versions:
+                    max_version = self._get_java_requires(req_versions)
+                    version_string = self._process_java_version(max_version)
+                    parts = {'pkg': rules['package_name'],
+                             'op': rules.get('cmp_operator', '>='),
+                             'version': version_string}
+                    requires.add("{pkg} {op} {version}".format(**parts))
+                elif rules.get('always_generate'):
+                    if rules.get('package_name'):
+                        requires.add(rules.get('package_name'))
+        return requires
+
+    def _get_java_requires(self, reqs):
+        return max([self._normalize_java_requires(x) for x in reqs])
+
+    def _normalize_java_requires(self, req):
+        version = req.split(".")
+        if len(version) == 1:
+            req = "1." + req
+        # sanity check
+        try:
+            float(req)
+        except ValueError:
+            raise ValueError("Unknown Java version {0}".format(req))
+        return req
+
+    def _process_java_version(self, version_string):
+        version = version_string.split('.')
+        major = int(version[0])
+        minor = int(version[1])
+        return "1:{0}.{1}".format(major, minor)
+
+    def _filter_requires(self, requires):
+        filters = self.config.get('requires_filter', [])
+        filtered = set()
+        regexes = []
+        for filt in filters:
+            artifact_glob = re.sub(r'\\\*', '.*', re.escape(filt))
+            regexes.append(re.compile(r'^{0}(\s*[<>=].*)?$'.format(artifact_glob)))
+            regexes.append(re.compile(r'mvn\({0}\)'.format(artifact_glob)))
+        for req in requires:
+            if not any([regex.search(req) for regex in regexes]):
+                filtered.add(req)
+        return filtered
+
+    def _get_config(self):
+        config = get_config()
+        return config.get('maven.req', {}) if config else {}
+
+    def _check_pom_deps(self, metadata):
+        """ Check if dependencies on POM files are satisfiable """
+        unresolvable = []
+        requests = []
+        deps = []
+        for provided in metadata.get_provided_artifacts():
+            for dep in provided.dependencies:
+                if dep.extension != "pom":
+                    continue
+                if dep.is_provided_by(self.provided_artifacts)[0]:
+                    continue
+                else:
+                    deps.append(dep)
+                    request = ResolutionRequest(dep.groupId, dep.artifactId,
+                                                extension=dep.extension,
+                                                classifier=dep.classifier,
+                                                version=dep.requestedVersion)
+                    requests.append(request)
+        if requests:
+            results = XMvnResolve.process_raw_request(requests)
+            for i, r in enumerate(results):
+                if not r:
+                    unresolvable.append(deps[i])
+        return unresolvable
+
+    def _find_what_requires(self, artifact):
+        """
+        Determine which artifact requires given artifact. This is an attempt to
+        find the artifact by guessing where the pom might be and going through
+        its dependencies. It is not meant to be reliable or pretty, just to
+        print more descriptive error messages when we can. If it cannot find
+        anything, returns None.
+        """
+        # TODO: simplify this
+        try:
+            pom_dir = os.path.join(self.metadata_dir, '..', 'maven-poms')
+            for dirname, _, filenames in os.walk(pom_dir):
+                for filename in filenames:
+                    if filename.endswith(".pom"):
+                        pomfile = os.path.join(dirname, filename)
+                        pom = POM(pomfile)
+                        dependencies = pom.dependencies
+                        for dep in dependencies:
+                            if dep.scope not in ('compile', 'runtime'):
+                                if not (dep.scope == 'test' and pom.packaging == 'pom'):
+                                    continue
+                            if (artifact.artifactId == dep.artifactId and
+                               artifact.groupId == dep.groupId and
+                               artifact.extension == dep.extension and
+                               artifact.classifier == dep.classifier):
+                                return "{g}:{a}".format(g=pom.groupId,
+                                                        a=pom.artifactId)
+        except Exception:
+            pass
+        return None
 
 
 if __name__ == "__main__":
+    rpmconf = None
     try:
-        builder = TagBuilder ()
-    except Exception, e:
+        rpmconf = init_rpmgen(sys.argv)
+        builder = TagBuilder()
+    except Exception:
         traceback.print_exc(file=sys.stderr)
-        sys.stderr.write(str(e))
-        # rpmbuild ignores non-zero exit codes but this that is bad. Make sure
-        # the build fails and doesn't silently ignore problems
-        os.kill(os.getppid(), signal.SIGTERM)
+        kill_parent_process(rpmconf)
+
+
+# Local Variables:
+# mode: Python
+# End:
+# vi: ft=python

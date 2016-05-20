@@ -1,6 +1,20 @@
 -*- outline -*-
 
 
+* TASKS
+
+** Include ivy-local in package diagram
+
+** Add more tests for new metadata
+
+** Test/improve Ivy support in mvn_artifact
+
+** Move POM related classes from artifact.py to separate (sub)module/library(?)
+
+** changes around OSGi prov/req generators need some tests
+
+** implement recommends and suggests generators
+
 * BUGS
 
 ** Add testcase for pom properties with whitespace
@@ -21,4 +35,3 @@
 
 
 * FEATURES
-

@@ -1,6 +1,6 @@
 # Functions library for Java applications.                           -*- sh -*-
 #
-# Copyright (c) 2012-2013, Red Hat, Inc
+# Copyright (c) 2012-2014, Red Hat, Inc
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -109,6 +109,14 @@ _load_java_conf()
     if [ -n "${java_opts_save}" ]; then
 	JAVACMD_OPTS="${java_opts_save}"
     fi
+
+    if [ "_${JAVA_ABRT}" != "_off" -a -f "%{abrtlibdir}/libabrt-java-connector.so" -a -f "%{rundir}/abrt/abrtd.pid" ]; then
+	_log "ABRT Java connector was enabled"
+	_log "Using ABRT Java agent: %{abrtlibdir}/libabrt-java-connector.so"
+	JAVACMD_OPTS="${JAVACMD_OPTS} -agentpath:%{abrtlibdir}/libabrt-java-connector.so=abrt=on"
+    else
+	_log "ABRT Java connector is disabled"
+    fi
 }
 
 
@@ -201,11 +209,11 @@ set_classpath()
     _set_java_home
 
     # get local classpath first
-    set -- ${@} ${ADDITIONAL_JARS}
-    LOCAL_CLASSPATH=$("%{bindir}/build-classpath" ${@})
+    set -- "${@}" ${ADDITIONAL_JARS}
+    LOCAL_CLASSPATH=$("%{bindir}/build-classpath" "${@}")
 
     # append original classpath if defined
-    CLASSPATH=${LOCAL_CLASSPATH}${CLASSPATH:+:}${CLASSPATH}
+    CLASSPATH="${LOCAL_CLASSPATH}${CLASSPATH:+:}${CLASSPATH}"
 }
 
 set_javacmd()
@@ -224,7 +232,12 @@ set_javacmd()
 	JAVACMD="${JAVA_HOME}/${cmd}"
 	if [ -x "${JAVACMD}" ]; then
 	    _log "Using configured JAVACMD: $JAVACMD"
-	    JAVACMD="${JAVACMD}${JAVACMD_OPTS:+ }${JAVACMD_OPTS}"
+	    if [ -n "${JAVACMD_OPTS}" ]; then
+		_log "Using java-wrapper with extra options: ${JAVACMD_OPTS}"
+		export _JP_JAVACMD="${JAVACMD}"
+		export _JP_JAVACMD_OPTS="${JAVACMD_OPTS}"
+		JAVACMD="%{javadir}-utils/java-wrapper"
+	    fi
 	    return 0
 	fi
     done
@@ -232,7 +245,12 @@ set_javacmd()
     JAVACMD=$(which java 2>/dev/null || :)
     if [ -x "${JAVACMD}" ]; then
 	_log "Using JAVACMD from PATH: $JAVACMD"
-	JAVACMD="${JAVACMD}${JAVACMD_OPTS:+ }${JAVACMD_OPTS}"
+	if [ -n "${JAVACMD_OPTS}" ]; then
+	    _log "Using java-wrapper with extra options: ${JAVACMD_OPTS}"
+	    export _JP_JAVACMD="${JAVACMD}"
+	    export _JP_JAVACMD_OPTS="${JAVACMD_OPTS}"
+	    JAVACMD="%{javadir}-utils/java-wrapper"
+	fi
 	return 0
     fi
 
@@ -243,13 +261,23 @@ set_javacmd()
 # Set flags
 set_flags()
 {
-    FLAGS="${@}${ADDITIONAL_FLAGS:+ }${ADDITIONAL_FLAGS}"
+    FLAGS=""
+    set -- "${@}" ${ADDITIONAL_FLAGS}
+    while [ $# -gt 0 ]; do
+	FLAGS="${FLAGS}${FLAGS:+ }'$(echo "$1"|sed "s#[']#'\\\\''#g")'"
+	shift
+    done
 }
 
 # Set options
 set_options()
 {
-    OPTIONS="${@}${ADDITIONAL_OPTIONS:+ }${ADDITIONAL_OPTIONS}"
+    OPTIONS=""
+    set -- "${@}" ${ADDITIONAL_OPTIONS}
+    while [ $# -gt 0 ]; do
+	OPTIONS="${OPTIONS}${OPTIONS:+ }'$(echo "$1"|sed "s#[']#'\\\\''#g")'"
+	shift
+    done
 }
 
 # Run application
@@ -267,55 +295,13 @@ run()
     fi
 
     # let's start
-    exec "${JAVACMD}" ${FLAGS} -classpath "${CLASSPATH}" \
-	${OPTIONS} "${MAIN_CLASS}" "${@}"
+    eval "exec \"\${JAVACMD}\" ${FLAGS} -classpath \"\${CLASSPATH}\" ${OPTIONS} \"\${MAIN_CLASS}\" \"\${@}\""
 }
 
 # Set JVM-related directories
 set_jvm_dirs()
 {
-    local IFS
-    local re
-    local option
-    local version
-
     _set_java_home
-
-    # Jar repository provided by the JVM
-    JVM_LIBDIR=${JVM_ROOT}-exports/$(echo "${JAVA_HOME}" |\
-        sed -n "s+${JVM_ROOT}/\([-_[:alnum:].]*\)\(.*\)+\1+p")
-
-    # Java standard version of the JVM.  -fullversion seems to be lot faster
-    # to invoke than -version.  Some examples:
-    #   java full version "1.4.2_04-b05"
-    #   java full version "J2RE 1.4.1 IBM build cxia321411-20030930"
-    #   java full version "Blackdown-1.4.1-01"
-    #   java version "1.5.0"
-
-    re='\([[:digit:]]\{1,\}\.[[:digit:]]\{1,\}\(\.[[:digit:]]\{1,\}\)*\)'
-    for option in -fullversion -version; do
-        # Yuck, "grep -o" would be cleaner, but requires GNU grep >= 2.5.
-        # This could be improved/simplified if sed had non-greedy matching.
-        version=$(${JAVACMD} $option 2>&1 | sed -n \
-            -e '/\(openjdk\|java\) \(full \)*version "/s/'$re'/<<<\1>>>/' \
-            -e '/\(openjdk\|java\) \(full \)*version "/s/.*<<<\([^>]\{1,\}\)>>>.*/\1/p')
-        if [ -n "${version}" ]; then
-	    _log "Determined Java version to be ${version}"
-            break
-        fi
-    done
-
-    if [ -z "${version}" ]; then
-	echo "$0: Unable to determine Java version"
-	return 1
-    fi
-
-    # Jar repository for this Java standard
-    IFS=:
-    _javaverdirs=
-    for dir in ${_javadirs}; do
-	_javaverdirs="${_javaverdirs}${_javaverdirs:+:}${dir}-${version}"
-   done
 
     return 0
 }
@@ -333,7 +319,7 @@ link_jar_repository() {
    while [ $# -gt 0 ] ; do
       case "$1" in
          -h|--hard)
-            _LINK_CMD="ln -f"
+            _LINK_CMD="ln -fL"
             ;;
          -s|--soft|--symbolic)
             _LINK_CMD="ln -fs"
@@ -393,7 +379,7 @@ link_jar_repository() {
             _ALLFOUND=1
          fi
       done
-   popd $repository > /dev/null
+   popd > /dev/null
    return $_ALLFOUND
 }
 
@@ -420,7 +406,7 @@ find_jar()
 	return ${?}
     fi
 
-    set -- ${JVM_LIBDIR} ${_javaverdirs} ${_javadirs}
+    set -- ${_javaverdirs} ${_javadirs}
 
     _log "JAR search path is:"
     for dir; do

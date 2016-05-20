@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# Copyright (c) 2012, Red Hat, Inc
+#!%{pyinterpreter}
+# Copyright (c) 2014, Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -30,53 +30,51 @@
 #
 # Authors: Alexander Kurtakov <akurtako@redhat.com>
 #          Stanislav Ochotnicky <sochotnicky@redhat.com>
+#          Michal Srb <msrb@redhat.com>
 
-import os
-import signal
 import sys
 import traceback
-from javapackages import Depmap, Artifact
+from javapackages.cache.metadata import MetadataCache
+from javapackages.common.util import kill_parent_process, init_rpmgen, get_logger
+
+_log = get_logger("maven.prov")
+
 
 class TagBuilder:
     def __init__ (self, filelist=None):
-        if filelist == None:
+        if filelist is None:
             filelist = sys.stdin
-        paths = map (lambda x: x.rstrip (), filelist.readlines ())
+        paths = [line.rstrip() for line in filelist.readlines()]
+        _log.info("input: {fl}".format(fl=paths))
+
+        cache = MetadataCache(rpmconf)
         for path in paths:
-            depmap = Depmap(path)
+            metadata = cache.get_metadata_for_path(path)
 
-            for m_artifact, l_artifact in depmap.get_provided_mappings():
-                prov_artifact = m_artifact
-                if l_artifact.version:
-                    prov_artifact = Artifact(m_artifact.groupId,
-                                             m_artifact.artifactId,
-                                             extension=m_artifact.extension,
-                                             classifier=m_artifact.classifier,
-                                             version=l_artifact.version,
-                                             namespace=l_artifact.namespace)
-                if prov_artifact.extension == 'jar':
-                    prov_artifact.extension = ''
-
-                print("{rpmstr} = {version}".format(
-                        rpmstr=prov_artifact.get_rpm_str(depmap.is_compat()),
-                        version=m_artifact.version ))
-                # preserve compatibility and generate simple mvn(g:a) provides
-                # for pom artifacts
-                ns = l_artifact.namespace
-                if prov_artifact.extension == 'pom':
-                    print("{ns}mvn({gid}:{aid}) = {version}".format(
-                            ns=(ns + "-") if ns else "",
-                            gid=prov_artifact.groupId,
-                            aid=prov_artifact.artifactId,
-                            version=m_artifact.version))
+            provides = set()
+            for artifact in metadata.artifacts:
+                provides.add(artifact.get_rpm_str(namespace=artifact.namespace,
+                                                  pkg_ver=artifact.version))
+            # print OSGi provides from metadata
+            osgi_provides = metadata.get_osgi_provides()
+            for p in osgi_provides:
+                provides.add(p.get_rpm_str())
+            _log.info(", ".join(provides))
+            if provides:
+                print('\n'.join(provides))
 
 
 if __name__ == "__main__":
+    rpmconf = None
     try:
-        builder = TagBuilder ()
-    except Exception, e:
+        rpmconf = init_rpmgen(sys.argv)
+        builder = TagBuilder()
+    except Exception:
         traceback.print_exc(file=sys.stderr)
-        sys.stderr.write(str(e))
-        # rpmbuild ignores non-zero exit codes but this that is bad. Make sure
-        # the build fails and doesn't silently ignore problems
-        os.kill(os.getppid(), signal.SIGKILL)
+        kill_parent_process(rpmconf)
+
+
+# Local Variables:
+# mode: Python
+# End:
+# vi: ft=python
