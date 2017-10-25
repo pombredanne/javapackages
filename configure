@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2013 Red Hat, Inc.
+# Copyright (c) 2013-2017 Red Hat, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,10 @@
 set -e
 
 vars="
+scl
+scl_root
+scl_root_relative
+
 bindir
 datadir
 localstatedir
@@ -57,6 +61,7 @@ jvmlibdir
 jvmprivdir
 jvmsysconfdir
 mavenpomdir
+ivyxmldir
 pyinterpreter
 abrtlibdir
 "
@@ -80,6 +85,8 @@ test -z "${pyinterpreter}" && pyinterpreter=$(which python)
 test -z "${abrtlibdir}" && abrtlibdir="${prefix}/lib/abrt-java-connector"
 
 eval $(sed -n 's/^%_\('"$vars_re"'\)\ *\(.*\)$/\1="\2"/;T;s/%{_\(.*}\)/${\1/;p' macros.d/macros.jpackage)
+
+test -z "${scl_root_relative}" -a -n "${scl_root}" && scl_root_relative=$(sed "s:^/*::" <<<"${scl_root}")
 
 set | sed -n 's/^\('"$vars_re"'\)=/&/;T;p' >config.status
 

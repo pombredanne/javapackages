@@ -14,12 +14,17 @@ from functools import wraps
 from lxml import etree
 
 DIRPATH = path.dirname(path.realpath(__file__))
-SCRIPT_ENV = {'PATH':'{mock}:{real}'.format(mock=DIRPATH,
-                                            real=os.environ['PATH']),
-              'PYTHONPATH':os.environ['PYTHONPATH']}
+SCRIPT_ENV = {
+    'PATH': '{mock}:{real}'.format(mock=DIRPATH, real=os.environ['PATH']),
+    'LC_ALL': 'C.UTF-8',
+}
+
+for var in ('PYTHONPATH', 'COVERAGE_PROCESS_START'):
+    if var in os.environ:
+        SCRIPT_ENV[var] = os.environ[var]
 
 
-def call_script(name, args, stdin=None, extra_env={}):
+def call_script(name, args, stdin=None, extra_env={}, async=False):
     with open("tmpout", 'w') as outfile:
         with open("tmperr", 'w') as errfile:
             procargs = [sys.executable, name]
@@ -31,6 +36,8 @@ def call_script(name, args, stdin=None, extra_env={}):
                                     env=env,
                                     stdin=subprocess.PIPE,
                                     universal_newlines=True)
+            if async:
+                return (outfile, errfile, proc)
             proc.communicate(stdin)
             ret = proc.wait()
     with open("tmpout", 'r') as outfile:
@@ -111,6 +118,17 @@ def javautils_script(name, fnargs):
         @wraps(fun)
         def test_decorated(self):
             scriptpath = path.join(DIRPATH, '..', 'java-utils', name + '.py')
+            (stdout, stderr, return_value) = call_script(scriptpath, fnargs)
+            fun(self, stdout, stderr, return_value)
+        return test_decorated
+    return test_decorator
+
+
+def bindir_script(name, fnargs):
+    def test_decorator(fun):
+        @wraps(fun)
+        def test_decorated(self):
+            scriptpath = path.join(DIRPATH, '..', 'bin', name)
             (stdout, stderr, return_value) = call_script(scriptpath, fnargs)
             fun(self, stdout, stderr, return_value)
         return test_decorated
